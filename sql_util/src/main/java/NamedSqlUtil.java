@@ -1,5 +1,4 @@
 import java.text.StringCharacterIterator;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -54,7 +53,7 @@ public class NamedSqlUtil {
                 targetSqlIterator.next();
             }
         }catch (Exception e){
-            logger.error("namedPrmToPreparedPrm解析异常，检查传参格式",e);
+            // logger.error("namedPrmToPreparedPrm解析异常，检查传参格式",e);
             throw e;
         }
     }
@@ -136,7 +135,7 @@ public class NamedSqlUtil {
 
         Object resValue = paramMap.get(strKey);
         if (resValue == null){
-            logger.warn("analyseReplaceLogic失败，key不存在："+strKey);
+            // logger.warn("analyseReplaceLogic失败，key不存在："+strKey);
         }
 
         resSql.append(resValue);
@@ -157,7 +156,7 @@ public class NamedSqlUtil {
 
         Object resValue = paramMap.get(strKey);
         if (resValue == null){
-            logger.warn("analysePlaceholderLogic失败，key不存在："+strKey);
+            // logger.warn("analysePlaceholderLogic失败，key不存在："+strKey);
         }
 
         resSql.append('?');
