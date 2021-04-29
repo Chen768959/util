@@ -6,9 +6,37 @@ import java.util.Map;
 public class NamedSqlUtil {
     /**
      * 将具名参数写法的sql，转换成占位符写法，整个方法只会循环遍历一遍 targetSql
-     * 占位符key写法“:key”，例：select * from table where name = #:name  （“key名仅支持 大小写英文及数字”）
-     * list写法“#{listname:and #}”，例：select * from table where #{aList:or (name = #:name and year = #:year)#}  （“冒号”后可跟任何符号或字符串的间隔符，但是最后都得用空格与正文隔开）
+     *
+     * 支持如下特殊关键字：
+     * 1、字符串替换
+     * #=strKey
+     * strKey作为key，从map中查找value替换；
+     * strKey仅支持大小写英文及数字。
+     *
+     * 2、字符串替换成占位符
+     * #:strKey
+     * '#:strKey'替换为'?'，strKey作为key，从map中查找value作为填充Object；
+     * strKey仅支持大小写英文及数字。
+     *
+     * 3、if条件关键字
+     * #{IF=strKey }
+     * strKey作为key，从map中查找value；
+     * 如果value存在，则继续解析if中的内容，如不存在，则忽略if中内容；
+     * strKey仅支持大小写英文及数字。
+     *
+     * 4、list循环关键字
+     * #{listName:type }
+     * listName作为key，从map中查找value；
+     * 循环此中内容，每次循环会将'type'作为间隔符；
+     * 此value应为 List<Map<String, Object>> 类型；
+     * list中的map数量决定了循环的次数，每个map即每次循环时会用到的参数map；
+     * listName仅支持大小写英文及数字；
+     * type支持“除空格以外”的任意字符串，单需用空格与正文隔开；
+     * list中也同样支持此四种关键字。
+     *
+     * 例：select * from table where #{aList:or (name = #:name and year = #:year)}
      * 解析后：select * from table where (name = ? and year = ?) or (name = ? and year = ?) or (name = ? and year = ?)
+     *
      * @param targetSql 含有具名参数sql
      * @param paramMap 参数map
      * @param resSql 存放转换结果sql
@@ -17,223 +45,217 @@ public class NamedSqlUtil {
      * @return void
      */
     public void namedPrmToPreparedPrm(String targetSql, Map<String,Object> paramMap, StringBuilder resSql, List<Object> resPrmList) throws Exception{
-        // 是否在解析变量
-        boolean analyseKey = false;
-        // 当前解析的参数key
-        StringBuilder curKey = new StringBuilder();
-
-        // 是否在解析列表
-        boolean analyseList = false;
-        // 当前解析列表的列表key
-        StringBuilder curListKey = new StringBuilder();
-        // 当前解析列表的循环时间隔条件
-        StringBuilder curListType = new StringBuilder();
-
         try {
             StringCharacterIterator targetSqlIterator = new StringCharacterIterator(targetSql);
             while (targetSqlIterator.current() != StringCharacterIterator.DONE){
-                // 尝试解析变量
-                if (analyseKey = analyseKey(targetSqlIterator.current(), analyseKey, curKey, paramMap, resSql, resPrmList, targetSqlIterator)){
-                    targetSqlIterator.next();
-                    continue;
-                }
-                // 尝试解析列表
-                if (analyseList = analyseList(targetSqlIterator.current(), analyseList, curListKey, curListType, paramMap, resSql, resPrmList, targetSqlIterator)){
-                    targetSqlIterator.next();
-                    continue;
-                }
-                // 否则无需解析直接存入
+                checkSpecialAndAct(targetSqlIterator, paramMap, resSql, resPrmList);
+
                 resSql.append(targetSqlIterator.current());
                 targetSqlIterator.next();
             }
         }catch (Exception e){
+            logger.error("namedPrmToPreparedPrm解析异常，检查传参格式",e);
             throw e;
-        }
-
-        // 末尾字符为占位符
-        if (analyseKey){
-            Object value = paramMap.get(curKey.toString());
-            if (value == null){
-                // log
-            }
-            resPrmList.add(value);
-            resSql.append("? ");
         }
     }
 
     /**
-     * 解析循环体
-     * @param c 当前字符
-     * @param analyseList 是否在解析循环体列表
-     * @param curListKey 循环体列表当前的key名，{nameKey:or }中的nameKey
-     * @param curListType 循环体列表当前的间隔符，{nameKey:or }中的or
-     * @param paramMap 总参数
-     * @param resSql
-     * @param resPrmList
+     * 检查当前字符是否是特殊字符（#{IF、#{、#:、#=）
+     * 如果匹配成功，
+     * 则进入对应解析方法，且填充好resSql和resPrmList，
+     * 最后指标下移到后一位“未处理，且非特殊字符”的下标（即解析完后检查下一位字符，如果依旧为特殊字符则递归直到指向正常字符）
+     * 且返回true
+     *
+     * 如果未匹配成功，则返回false且保持当前字符指针不动
+     *
+     * 总之该方法完毕后总会指向“非特殊字符”的下标
      * @param targetSqlIterator
      * @author Chen768959
      * @return boolean
      */
-    private boolean analyseList(char c, boolean analyseList, StringBuilder curListKey, StringBuilder curListType,
-                                Map<String,Object> paramMap, StringBuilder resSql, List<Object> resPrmList,
-                                StringCharacterIterator targetSqlIterator) {
-        // 开始解析
-        if(analyseList){
-            // 开始解析listKsy和listType
-            if (curListKey.length() == 0){
-                curListKey.append(c);
-                // 遍历到空格为止，期间解析出listKey和listType
-                while (! Character.isSpaceChar(c = targetSqlIterator.next())){
-                    if (c == ':'){// 开始解析listType
-                        while (! Character.isSpaceChar(c = targetSqlIterator.next())){// 顺着当前index继续遍历
-                            curListType.append(c);
-                        }
-                        // 遍历到空格后，结束遍历
-                        return true;
-                    }
-                    curListKey.append(c);
+    private boolean checkSpecialAndAct(StringCharacterIterator targetSqlIterator, Map<String,Object> paramMap, StringBuilder resSql, List<Object> resPrmList){
+        if (checkTargetTagCur(targetSqlIterator, '#')){
+            if (checkTargetTagCur(targetSqlIterator, '{')){
+                if (checkTargetTagCur(targetSqlIterator,'I','F','=')){ // 满足if条件
+                    analyseIfLogic(targetSqlIterator, paramMap, resSql, resPrmList);
+                }else { // 满足list条件
+                    analyseListLogic(targetSqlIterator, paramMap, resSql, resPrmList);
                 }
+                checkSpecialAndAct(targetSqlIterator, paramMap, resSql, resPrmList);
                 return true;
             }
-
-            // 开始解析需要循环内容
-            StringBuilder loopStrBuilder = new StringBuilder();// 循环内容，其中占位符会被解析成'?'，
-            List<String> keyInloopStrList = new ArrayList<>();// 循环内容中如果还包含具名参数，则key名依次被解析到此list
-            boolean analyseKeyInLoop = false;
-            StringBuilder keyInLoop = new StringBuilder();
-
-            // 遍历循环体直至结尾
-            while (! checkTargetTagCur('#','}',targetSqlIterator)){
-                // 解析loop内的具名key
-                if (analyseKeyInLoop){
-                    if( ! (Character.isLowerCase(c) || Character.isUpperCase(c) || Character.isDigit(c))){// KeyInLoop解析完毕
-                        analyseKeyInLoop = false;
-                        keyInloopStrList.add(keyInLoop.toString());
-                        loopStrBuilder.append("?").append(c);
-                    }
-
-                    keyInLoop.append(c);
-                    c = targetSqlIterator.next();
-                    continue;
-                }
-
-                // 准备解析loop内的具名key
-                if (checkTargetTagCur('#',':',targetSqlIterator)){
-                    analyseKeyInLoop = true;
-                    keyInLoop.delete(0,keyInLoop.length());
-                    c = targetSqlIterator.next();//next之前下标指向':'，next后指向loop内key名首字符
-                    continue;
-                }
-
-                //正常loop内容
-                loopStrBuilder.append(c);
-                c = targetSqlIterator.next();
+            if (checkTargetTagCur(targetSqlIterator, ':')){ // 满足占位符替换条件
+                analysePlaceholderLogic(targetSqlIterator, paramMap, resSql, resPrmList);
+                checkSpecialAndAct(targetSqlIterator, paramMap, resSql, resPrmList);
+                return true;
             }
-
-            // 如果循环体解析完毕，还存在正在解析的内部具名key，则该具名key存在于末尾处
-            if (analyseKeyInLoop){
-                keyInloopStrList.add(keyInLoop.toString());
-                loopStrBuilder.append("?");
+            if (checkTargetTagCur(targetSqlIterator, '=')){ // 满足字符串替换条件
+                analyseReplaceLogic(targetSqlIterator, paramMap, resSql);
+                checkSpecialAndAct(targetSqlIterator, paramMap, resSql, resPrmList);
+                return true;
             }
-
-            // loop解析完毕，根据参数列表构建多个loopStr
-            List<Map<String, Object>> loopParamList = (List<Map<String, Object>>) paramMap.get(curListKey.toString());
-            if (loopParamList == null){
-                // log
-                return false;
-            }
-            loopParamList.stream().forEach(loopParamMap->{
-                // 构建结构sql
-                resSql.append(' ').append(loopStrBuilder).append(' ').append(curListType);
-
-                // 构建结果sql的对应占位符结果list
-                keyInloopStrList.stream().forEach(keyInloopStr->{
-                    Object resPrm = loopParamMap.get(keyInloopStr);
-                    if (resPrm == null){
-                        // log
-                    }
-                    resPrmList.add(resPrm);
-                });
-            });
-            // 删除末尾curListType
-            if (! loopParamList.isEmpty()){
-                resSql.delete(resSql.length() - curListType.length(), resSql.length());
-            }
-
-            // list解析完毕,index后移1，因为当前index值为“}”
-            targetSqlIterator.next();
-        }
-
-        //准备解析list
-        if (checkTargetTagCur('#', '{', targetSqlIterator)){
-            curListKey.delete(0,curListKey.length());
-            curListType.delete(0,curListType.length());
-            return true;
         }
 
         return false;
     }
 
     /**
-     * 解析变量
-     * @param c 当前字符
-     * @param analyseKey
-     * @param curKey
+     * 判断当前读取位置是否满足指定顺序的字符，
+     * 满足则下标位移到“指定字符后的一位”
+     * 不满足则不做任何位移
+     * @param targetSqlIterator
+     * @param targetChar
+     * @author Chen768959
+     * @return boolean 满足：true，不满足：false
+     */
+    private boolean checkTargetTagCur(StringCharacterIterator targetSqlIterator, char... targetChar){
+        for (int i=0 ; i<targetChar.length; i++){
+            if (targetSqlIterator.current() != targetChar[i]){
+                for (int j=i ; j<=0 ; j--){
+                    targetSqlIterator.previous();
+                }
+                return false;
+            }
+            targetSqlIterator.next();
+        }
+
+        return true;
+    }
+
+    /**
+     * 解析字符串替换条件，
+     * 当前下标指向'#='后一位
+     * @param targetSqlIterator
+     * @param paramMap
+     * @param resSql
+     * @author Chen768959
+     * @return void
+     */
+    private void analyseReplaceLogic(StringCharacterIterator targetSqlIterator, Map<String, Object> paramMap, StringBuilder resSql) {
+        String strKey = traveToSpace(targetSqlIterator);
+
+        Object resValue = paramMap.get(strKey);
+        if (resValue == null){
+            logger.warn("analyseReplaceLogic失败，key不存在："+strKey);
+        }
+
+        resSql.append(resValue);
+    }
+
+    /**
+     * 解析占位符条件，
+     * 当前下标指向'#:'后一位
+     * @param targetSqlIterator
      * @param paramMap
      * @param resSql
      * @param resPrmList
      * @author Chen768959
-     * @return boolean true表示正在解析，false表示该字符不涉及变量解析
+     * @return void
      */
-    private boolean analyseKey(char c, boolean analyseKey, StringBuilder curKey, Map<String,Object> paramMap,
-                               StringBuilder resSql, List<Object> resPrmList, StringCharacterIterator targetSqlIterator) {
-        // curKey非空则当前处于解析key中，判断是否为空格，空格则表示解析结束
-        if (analyseKey){
-            if (Character.isLowerCase(c) || Character.isUpperCase(c) || Character.isDigit(c)){
-                curKey.append(c);
-                return true;
-            }else {
-                // 根据现有key获取参数value，添加？占位符
-                Object value = paramMap.get(curKey.toString());
-                if (value == null){
-                    // log
-                }
+    private void analysePlaceholderLogic(StringCharacterIterator targetSqlIterator, Map<String, Object> paramMap, StringBuilder resSql, List<Object> resPrmList) {
+        String strKey = traveToSpace(targetSqlIterator);
 
-                resPrmList.add(value);
-                resSql.append("?");
-
-                return false;
-            }
+        Object resValue = paramMap.get(strKey);
+        if (resValue == null){
+            logger.warn("analysePlaceholderLogic失败，key不存在："+strKey);
         }
 
-        // 准备解析key
-        if (checkTargetTagCur('#',':',targetSqlIterator)){
-            curKey.delete(0,curKey.length());
-            return true;
-        }
-
-        return false;
+        resSql.append('?');
+        resPrmList.add(resValue);
     }
 
     /**
-     * 检查当前读取位置是否满足指定顺序字符，
-     * 如果满足，则下标位移到第二个字符
-     * 如果不满足，则保持不变
-     * @param targetOne 需要满足的第一个字符
-     * @param targetTwo 需要满足的第二个字符
+     * 解析if条件，
+     * 当前下标指向'#{IF='后一位
+     * @param targetSqlIterator
+     * @param paramMap
+     * @param resSql
+     * @param resPrmList
+     * @author Chen768959
+     * @return void
+     */
+    private void analyseIfLogic(StringCharacterIterator targetSqlIterator, Map<String, Object> paramMap, StringBuilder resSql, List<Object> resPrmList) {
+        int loopNum = 0;
+
+        // 判断if的strKey是否存在
+        String strKey = traveToSpace(targetSqlIterator);
+        Object resValue = paramMap.get(strKey);
+
+        // 当前指针指向if的strKey的后一位
+
+        // 对应value不存在则忽略if内容
+        if (resValue == null){
+            char c = targetSqlIterator.current();
+            while (c != StringCharacterIterator.DONE){
+                if (c == '{'){
+                    loopNum++;
+                }else if (c == '}'){
+                    if (loopNum <= 0){
+                        targetSqlIterator.next();//跳出if，且将下标移向if后一位
+                        break;
+                    }else {
+                        loopNum--;
+                    }
+                }
+
+                c = targetSqlIterator.next();
+            }
+            return;
+        }
+
+        // 解析if中内容
+        char c = targetSqlIterator.current();
+        while (c != StringCharacterIterator.DONE){
+            // 判断当前符号是否为特殊关键字，是则需要解析
+            checkSpecialAndAct(targetSqlIterator, paramMap, resSql, resPrmList);
+            // 重新赋值解析后位置
+            c = targetSqlIterator.current();
+            if (c == '{'){
+                loopNum++;
+            }else if (c == '}'){
+                if (loopNum <= 0){
+                    targetSqlIterator.next();//跳出if，且将下标移向if后一位
+                    break;
+                }else {
+                    loopNum--;
+                }
+            }
+
+            resSql.append(c);
+            c = targetSqlIterator.next();
+        }
+    }
+
+    /**
+     * 解析list条件，
+     * 当前下标指向'#{'后一位
+     * @param targetSqlIterator
+     * @param paramMap
+     * @param resSql
+     * @param resPrmList
+     * @author Chen768959
+     * @return void
+     */
+    private void analyseListLogic(StringCharacterIterator targetSqlIterator, Map<String, Object> paramMap, StringBuilder resSql, List<Object> resPrmList) {
+
+    }
+
+    /**
+     * 从当前下标开始遍历直到特殊字符，返回遍历内容
      * @param targetSqlIterator
      * @author Chen768959
-     * @return boolean
+     * @return java.lang.String
      */
-    private boolean checkTargetTagCur(char targetOne, char targetTwo, StringCharacterIterator targetSqlIterator){
-        if (targetSqlIterator.current() == targetOne){
-            if (targetSqlIterator.next() == targetTwo){
-                return true;
-            }else {
-                targetSqlIterator.previous();
-                return false;
-            }
+    private String traveToSpace(StringCharacterIterator targetSqlIterator){
+        char c = targetSqlIterator.current();
+        StringBuilder strKey = new StringBuilder();
+
+        //判断if的strKey是否存在，不存在则忽略if内容
+        while ( Character.isLowerCase(c) || Character.isUpperCase(c) || Character.isDigit(c) ){
+            strKey.append(c);
+            c = targetSqlIterator.next();
         }
-        return false;
+
+        return strKey.toString();
     }
 }
