@@ -54,6 +54,11 @@ public class NamedSqlUtil {
                 resSql.append(targetSqlIterator.current());
                 targetSqlIterator.next();
             }
+
+            // 末尾EOF需去除
+            if (resSql.charAt(resSql.length()-1) == StringCharacterIterator.DONE){
+                resSql.deleteCharAt(resSql.length()-1);
+            }
         }catch (Exception e){
             // logger.error("namedPrmToPreparedPrm解析异常，检查传参格式",e);
             throw e;
