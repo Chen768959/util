@@ -21,6 +21,18 @@ public class DataSourceConfig {
     @JsonProperty("password")
     private String password;
 
-    @JsonProperty("jdbc_url_list")
-    private List<String> jdbcUrlList;
+    @JsonProperty("host_list")
+    private List<HostInfo> hostList;
+
+    @Data
+    public static class HostInfo {
+        @JsonProperty("host")
+        private String host;
+
+        @JsonProperty("jdbc_port")
+        private int jdbcPort;
+
+        @JsonProperty("http_port")
+        private int httpPort;
+    }
 }

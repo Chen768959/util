@@ -12,6 +12,9 @@ public class ArgsConfig {
     @JsonProperty("concurrent_num")
     private int concurrentNum;
 
+    @JsonProperty("send_type")
+    private String sendType;
+
     @JsonProperty("dataSource_config")
     private DataSourceConfig dataSourceConfig;
 

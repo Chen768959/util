@@ -3,6 +3,7 @@ package pers.cc.util.auto_producer;
 import pers.cc.util.auto_producer.context.Context;
 import pers.cc.util.auto_producer.producer.DataProducer;
 import pers.cc.util.auto_producer.producer.DataProducerImpl;
+import pers.cc.util.auto_producer.writer.DorisHttpStreamRecordWriter;
 import pers.cc.util.auto_producer.writer.JdbcBatchRecordWriter;
 import pers.cc.util.auto_producer.writer.RecordWriter;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -10,6 +11,7 @@ import lombok.Data;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.text.SimpleDateFormat;
@@ -29,13 +31,18 @@ public class Main {
     /**
      * args:
      * {
-     *     "concurrent_num":"",     // 并发数
+     *     "concurrent_num":"",     // 数值，并发数
+     *     "send_type":"",          // 字符串，以什么方式发送压测数据，可选项:"jdbc","http_stream"
      *     "dataSource_config":{
      *         "engine_type":"",    // 字符串，"doris","clickhouse"
      *         "user_name":"",      // 字符串，用户名
      *         "password":"",       // 字符串，密码
-     *         "jdbc_url_list":[    // 可配置多个并自动负载均衡发送
-     *             ""               // 字符串，该数据源的jdbc_url字符串
+     *         "host_list":[        // 节点ip，可配置多个并自动负载均衡发送
+     *             {
+     *                 "host":"",
+     *                 "jdbc_port":"",
+     *                 "http_port":""
+     *             }
      *         ]
      *     },
      *     "produceData_config":{
@@ -110,7 +117,6 @@ public class Main {
 
     private static void executorExec(ExecRes[] execResArr, AtomicInteger curInsertSum, CountDownLatch latch) {
         for (int i = 0; i < context.getConcurrentNum(); i++) {
-            Connection connection = context.getConnectionList().get(i % context.getConnectionList().size());
             int finalI = i;
             context.getInsertThreadPool().submit(() -> {
                 ExecRes execRes = new ExecRes();
@@ -124,12 +130,31 @@ public class Main {
                 try {
                     int batchSize = context.getProduceDataRule().getBatchSize();
                     DataProducer dataProducer = new DataProducerImpl(context.getProduceDataRule());
-                    recordWriter = new JdbcBatchRecordWriter(
-                            context.getProduceDataRule().getDbName(),
-                            context.getProduceDataRule().getTableName(),
-                            context.getProduceDataRule().getColRules().stream().map(ProduceDataConfig.ColRule::getColName).collect(Collectors.toList()),
-                            dataProducer.dataTypeList(),
-                            connection);
+                    switch (context.getSendType()){
+                        case JDBC:
+                            recordWriter = new JdbcBatchRecordWriter(
+                                    context.getProduceDataRule().getDbName(),
+                                    context.getProduceDataRule().getTableName(),
+                                    context.getProduceDataRule().getColRules().stream().map(ProduceDataConfig.ColRule::getColName).collect(Collectors.toList()),
+                                    dataProducer.dataTypeList(),
+                                    context.getConnectionList().get(finalI % context.getConnectionList().size()));
+                            break;
+                        case HTTP_STREAM:
+                            switch (context.getEngineType()){
+                                case CLICKHOUSE:
+                                    throw new IllegalArgumentException("clickhouse http stream not support at this time");
+                                case DORIS:
+                                    recordWriter = new DorisHttpStreamRecordWriter(
+                                            context.getProduceDataRule().getDbName(),
+                                            context.getProduceDataRule().getTableName(),
+                                            context.getDataSourceConfig().getUserName(),
+                                            context.getDataSourceConfig().getPassword(),
+                                            context.getHostInfoList().get(finalI % context.getHostInfoList().size()).getHost(),
+                                            context.getHostInfoList().get(finalI % context.getHostInfoList().size()).getHttpPort());
+                                    break;
+                            }
+                    }
+
 
                     boolean finish = false;
                     while (true){
@@ -163,8 +188,8 @@ public class Main {
                             }
 
                             batches++;
-                        } catch (SQLException e){
-                            logger.error("线程("+finalI+") SQLException",e);
+                        } catch (IOException e){
+                            logger.error("线程("+finalI+") IOException",e);
                         }
                     }
                 } catch (Exception e){
@@ -184,7 +209,7 @@ public class Main {
                 if (recordWriter!=null){
                     try {
                         recordWriter.close();
-                    } catch (SQLException e) {
+                    } catch (IOException e) {
                         logger.error("recordWriter close error",e);
                     }
                 }

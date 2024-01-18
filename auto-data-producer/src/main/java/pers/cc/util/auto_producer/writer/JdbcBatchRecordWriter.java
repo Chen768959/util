@@ -1,5 +1,6 @@
 package pers.cc.util.auto_producer.writer;
 
+import java.io.IOException;
 import java.math.BigDecimal;
 import java.sql.*;
 import java.util.List;
@@ -19,42 +20,54 @@ public class JdbcBatchRecordWriter implements RecordWriter{
     }
 
     @Override
-    public void write(List<Object> writableData) throws SQLException {
-        for (int i = 0; i < dataTypes.size(); i++) {
-            if (writableData.get(i) == null){
-                this.statement.setNull(i+1, dataTypes.get(i));
-            }else {
-                switch (dataTypes.get(i)){
-                    case Types.VARCHAR:
-                        this.statement.setString(i + 1, (String) writableData.get(i));
-                        break;
-                    case Types.INTEGER:
-                        this.statement.setInt(i + 1, (int)writableData.get(i));
-                        break;
-                    case Types.FLOAT:
-                        this.statement.setFloat(i + 1, (float)writableData.get(i));
-                        break;
-                    case Types.DECIMAL:
-                        this.statement.setBigDecimal(i + 1, (BigDecimal) writableData.get(i));
-                        break;
-                    case Types.TIMESTAMP:
-                        this.statement.setTimestamp(i + 1, (Timestamp) writableData.get(i));
-                        break;
+    public void write(List<Object> writableData) throws IOException {
+        try {
+            for (int i = 0; i < dataTypes.size(); i++) {
+                if (writableData.get(i) == null){
+                    this.statement.setNull(i+1, dataTypes.get(i));
+                }else {
+                    switch (dataTypes.get(i)){
+                        case Types.VARCHAR:
+                            this.statement.setString(i + 1, (String) writableData.get(i));
+                            break;
+                        case Types.INTEGER:
+                            this.statement.setInt(i + 1, (int)writableData.get(i));
+                            break;
+                        case Types.FLOAT:
+                            this.statement.setFloat(i + 1, (float)writableData.get(i));
+                            break;
+                        case Types.DECIMAL:
+                            this.statement.setBigDecimal(i + 1, (BigDecimal) writableData.get(i));
+                            break;
+                        case Types.TIMESTAMP:
+                            this.statement.setTimestamp(i + 1, (Timestamp) writableData.get(i));
+                            break;
+                    }
                 }
             }
+            this.statement.addBatch();
+        } catch (SQLException e) {
+            throw new IOException(e);
         }
-        this.statement.addBatch();
     }
 
     @Override
-    public void flush() throws SQLException {
-        this.statement.executeBatch();
-        this.statement.clearBatch();
+    public void flush() throws IOException {
+        try {
+            this.statement.executeBatch();
+            this.statement.clearBatch();
+        } catch (SQLException e) {
+            throw new IOException(e);
+        }
     }
 
     @Override
-    public void close() throws SQLException {
-        this.statement.close();
+    public void close() throws IOException {
+        try {
+            this.statement.close();
+        } catch (SQLException e) {
+            throw new IOException(e);
+        }
     }
 
     private String buildInsertSql(String dbName, String tableName, List<String> colNameList) {

@@ -17,6 +17,7 @@ import java.util.Timer;
 import java.util.TimerTask;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.stream.Collectors;
 
 /**
  * @author Chen768959
@@ -29,7 +30,7 @@ public class Context {
     private Timer timestampTimer;
 
     @Getter
-    private List<Connection> connectionList;
+    private List<Connection> connectionList = new ArrayList<>();
     @Getter
     private ProduceDataConfig produceDataRule;
     @Getter
@@ -38,6 +39,14 @@ public class Context {
     private volatile Timestamp currentTimestamp;
     @Getter
     private int concurrentNum;
+    @Getter
+    private SendType sendType;
+    @Getter
+    private List<DataSourceConfig.HostInfo> hostInfoList;
+    @Getter
+    private DataSourceConfig dataSourceConfig;
+    @Getter
+    private EngineType engineType;
 
     private Context() {}
 
@@ -58,11 +67,41 @@ public class Context {
         // 并发数
         this.concurrentNum = argsConfig.getConcurrentNum();
 
+        // 发送方式
+        switch (argsConfig.getSendType()){
+            case "jdbc":
+                this.sendType = SendType.JDBC;
+                break;
+            case "http_stream":
+                this.sendType = SendType.HTTP_STREAM;
+                break;
+            default:
+                throw new IllegalArgumentException("arg SendType error, support jdbc,http_stream");
+        }
+
+        switch (argsConfig.getDataSourceConfig().getEngineType()){
+            case "clickhouse":
+                this.engineType = EngineType.CLICKHOUSE;
+                break;
+            case "doris":
+                this.engineType = EngineType.DORIS;
+                break;
+            default:
+                throw new IllegalArgumentException("arg EngineType error, support clickhouse,doris");
+        }
+
+        // ip信息
+        this.hostInfoList = argsConfig.getDataSourceConfig().getHostList();
+
         // 获取连接信息
-        this.connectionList = createDataConnectList(this.concurrentNum, argsConfig.getDataSourceConfig());
+        if (sendType == SendType.JDBC){
+            this.connectionList = createDataConnectList(this.engineType, this.concurrentNum, argsConfig.getDataSourceConfig());
+        }
 
         // 获取生产数据的规则
         this.produceDataRule = argsConfig.getProduceDataConfig();
+
+        this.dataSourceConfig = argsConfig.getDataSourceConfig();
 
         // 生成insert线程池
         this.insertThreadPool = Executors.newFixedThreadPool(concurrentNum);
@@ -94,12 +133,23 @@ public class Context {
         this.timestampTimer.scheduleAtFixedRate(task, 0, 1000);
     }
 
-    private List<Connection> createDataConnectList(int concurrentNum, DataSourceConfig dataSourceJson) throws ClassNotFoundException, SQLException {
-        switch (dataSourceJson.getEngineType()){
-            case "doris":
+    private List<Connection> createDataConnectList(EngineType engineType, int concurrentNum, DataSourceConfig dataSourceJson) throws ClassNotFoundException, SQLException {
+        List<String> jdbcUrlList;
+        switch (engineType){
+            case DORIS:
+                jdbcUrlList = dataSourceJson.getHostList().stream()
+                        .filter(hostInfo -> hostInfo.getJdbcPort()!=0)
+                        .map(hostInfo->
+                                "jdbc:mysql://"+hostInfo.getHost()+":"+hostInfo.getJdbcPort()+"?rewriteBatchedStatements=true&&socket_timeout=600000")
+                        .collect(Collectors.toList());
                 Class.forName("com.mysql.jdbc.Driver");
                 break;
-            case "clickhouse":
+            case CLICKHOUSE:
+                jdbcUrlList = dataSourceJson.getHostList().stream()
+                        .filter(hostInfo -> hostInfo.getJdbcPort()!=0)
+                        .map(hostInfo->
+                                "jdbc:clickhouse://"+hostInfo.getHost()+":"+hostInfo.getJdbcPort()+"?socket_timeout=600000")
+                        .collect(Collectors.toList());
                 Class.forName("ru.yandex.clickhouse.ClickHouseDriver");
                 break;
             default:
@@ -109,10 +159,10 @@ public class Context {
         List<Connection> connectionList = new ArrayList<>();
 
         for (int i=0, j = 0; i < concurrentNum; i++,j++) {
-            if (j == dataSourceJson.getJdbcUrlList().size()){
+            if (j == jdbcUrlList.size()){
                 j=0;
             }
-            String jdbcUrl = dataSourceJson.getJdbcUrlList().get(j);
+            String jdbcUrl = jdbcUrlList.get(j);
             connectionList.add(DriverManager.getConnection(jdbcUrl, dataSourceJson.getUserName(), dataSourceJson.getPassword()));
         }
 
