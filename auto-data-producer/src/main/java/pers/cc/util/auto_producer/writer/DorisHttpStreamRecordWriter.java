@@ -9,6 +9,7 @@ import org.apache.commons.csv.CSVPrinter;
 import java.io.IOException;
 import java.io.StringWriter;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 /**
  * @author Chen768959
@@ -37,7 +38,11 @@ public class DorisHttpStreamRecordWriter implements RecordWriter {
     @Override
     public void flush() throws IOException {
         try {
-            OkHttpClient client = new OkHttpClient();
+            OkHttpClient client = new OkHttpClient.Builder()
+                    .connectTimeout(600, TimeUnit.SECONDS)
+                    .readTimeout(600, TimeUnit.SECONDS)
+                    .writeTimeout(600, TimeUnit.SECONDS)
+                    .build();
 
             Request request = new Request.Builder()
                     .url(url)
